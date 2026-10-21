@@ -8,9 +8,7 @@ UPLOAD_FOLDER = 'static/uploads'
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# Contraseña secreta para que tu laptop y Render se comuniquen de forma segura
 SYNC_SECRET_KEY = "boda_cuñada_secreto_2026"
-
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'mp4', 'mov', 'avi', 'webp'}
 
 def allowed_file(filename):
@@ -20,6 +18,8 @@ def allowed_file(filename):
 def index():
     if request.method == 'POST':
         nombre = request.form.get('nombre', '').strip()
+        accion = request.form.get('accion', 'existente') # 'existente' o 'nuevo'
+        
         if not nombre:
             return "Por favor ingresa tu nombre", 400
         
@@ -27,6 +27,13 @@ def index():
         if not nombre_limpio:
             nombre_limpio = "Invitado"
             
+        # Si el usuario eligió crear una carpeta nueva a pesar de ya existir, le agregamos un sufijo único
+        if accion == 'nuevo':
+            contador = 1
+            while os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], f"{nombre_limpio}_{contador}")):
+                contador += 1
+            nombre_limpio = f"{nombre_limpio}_{contador}"
+
         user_folder = os.path.join(app.config['UPLOAD_FOLDER'], nombre_limpio)
         os.makedirs(user_folder, exist_ok=True)
         
@@ -37,22 +44,34 @@ def index():
                 archivo.save(os.path.join(user_folder, filename))
                 
         return redirect(url_for('gracias'))
+        
     return render_template('index.html')
 
 @app.route('/gracias')
 def gracias():
     return render_template('gracias.html')
 
+# API para verificar si la carpeta del invitado ya existe
+@app.route('/api/verificar-nombre', methods=['GET'])
+def verificar_nombre():
+    nombre = request.args.get('nombre', '').strip()
+    if not nombre:
+        return jsonify({"existe": False})
+    
+    nombre_limpio = secure_filename(nombre)
+    user_folder = os.path.join(app.config['UPLOAD_FOLDER'], nombre_limpio)
+    
+    existe = os.path.exists(user_folder) and os.path.isdir(user_folder)
+    return jsonify({"existe": existe})
+
 # ==========================================
-# API PARA QUE TU LAPTOP DESCARGUE Y LIMPIE
+# API PARA TU LAPTOP (SINCRONIZADOR)
 # ==========================================
 
 @app.route('/api/listar', methods=['GET'])
 def api_listar():
-    # Verificar llave secreta
     if request.headers.get('X-Sync-Key') != SYNC_SECRET_KEY:
         return jsonify({"error": "No autorizado"}), 403
-    
     data = {}
     if os.path.exists(UPLOAD_FOLDER):
         for invitado in os.listdir(UPLOAD_FOLDER):
@@ -74,16 +93,13 @@ def api_descargar(invitado, filename):
 def api_eliminar(invitado, filename):
     if request.headers.get('X-Sync-Key') != SYNC_SECRET_KEY:
         return jsonify({"error": "No autorizado"}), 403
-    
     file_path = os.path.join(UPLOAD_FOLDER, invitado, filename)
     if os.path.exists(file_path):
         os.remove(file_path)
-        # Si la carpeta del invitado queda vacía, la borramos también
         invitado_dir = os.path.join(UPLOAD_FOLDER, invitado)
         if not os.listdir(invitado_dir):
             os.rmdir(invitado_dir)
         return jsonify({"status": "eliminado"})
-    
     return jsonify({"error": "Archivo no encontrado"}), 404
 
 if __name__ == '__main__':
